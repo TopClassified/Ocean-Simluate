@@ -1,0 +1,152 @@
+#version 430 core
+
+#define N 512
+#define GLUS_PI	3.1415926535897932384626433832795
+
+uniform int u_processColumn;
+
+uniform int u_steps;
+
+layout (binding = 0, rg32f) uniform image2D u_imageIn; 
+layout (binding = 1, rg32f) uniform image2D u_imageOut;
+
+layout (binding = 2, r32f) uniform image1D u_imageIndices;
+
+// 如果一个变量被声明为shared，那么它将被保存到特定的位置，从而对同一个本地工作组内的所有计算着色器请求可见,通常访问共享shared变量的性能会远远好于访问图像或者着色器存储缓存（例如主内存）的性能
+shared vec2 sharedStore[N];
+
+// as N = 512, so local size is 512/2 = 256. Processing two fields per invocation.
+layout (local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+//复数乘法
+vec2 mulc(vec2 a, vec2 b)
+{
+	vec2 result;
+	
+	result.x = a.x * b.x - a.y * b.y;
+	result.y = a.x * b.y + b.x * a.y;
+	
+	return result;
+}
+
+//转换成单位根向量
+vec2 rootOfUnityc(int n, int k)
+{
+	vec2 result;
+	
+	result.x = cos(2.0 * GLUS_PI * float(k) / float(n));
+	result.y = sin(2.0 * GLUS_PI * float(k) / float(n));
+
+	return result;
+}
+
+void main(void)
+{
+	ivec2 leftStorePos;
+	ivec2 rightStorePos;
+
+	ivec2 leftLoadPos;
+	ivec2 rightLoadPos;
+
+	int xIndex = int(gl_GlobalInvocationID.x);
+	int yIndex = int(gl_GlobalInvocationID.y);
+
+	int leftStoreIndex = 2 * xIndex;
+	int rightStoreIndex = 2 * xIndex + 1;
+
+	//读取索引（每一组有两个索引例如（0,4））
+	int leftLoadIndex = int(imageLoad(u_imageIndices, leftStoreIndex).r);
+	int rightLoadIndex = int(imageLoad(u_imageIndices, rightStoreIndex).r);
+
+	// 加载和存储位置取决于行或列。
+	if (u_processColumn == 0)
+	{
+		leftLoadPos = ivec2(leftLoadIndex, yIndex);
+		rightLoadPos = ivec2(rightLoadIndex, yIndex);
+
+		leftStorePos = ivec2(leftStoreIndex, yIndex);
+		rightStorePos = ivec2(rightStoreIndex, yIndex);
+	}
+	else
+	{
+		leftLoadPos = ivec2(yIndex, leftLoadIndex);
+		rightLoadPos = ivec2(yIndex, rightLoadIndex);
+
+		leftStorePos = ivec2(yIndex, leftStoreIndex);
+		rightStorePos = ivec2(yIndex, rightStoreIndex);
+	}
+
+	// 从贴图中读取数据
+	vec2 leftValue = imageLoad(u_imageIn, leftLoadPos).xy;
+	vec2 rightValue = imageLoad(u_imageIn, rightLoadPos).xy;
+	//放入到共享缓存中
+	sharedStore[leftStoreIndex] = leftValue;
+	sharedStore[rightStoreIndex] = rightValue;
+
+	//确保所有数据都存储完毕（否则后续逻辑将无法读到所需的数据，即要保证时序）
+	memoryBarrierShared();
+	barrier();
+	
+	
+	int numberSections = N / 2;
+	int numberButterfliesInSection = 1;
+
+	int currentSection = xIndex;
+	int currentButterfly = 0;
+
+	// 计算FFT
+	for (int currentStep = 0; currentStep < u_steps; currentStep++)
+	{	
+		//根据位置来获取该组所需的两个索引
+		int leftIndex = currentButterfly + currentSection * numberButterfliesInSection * 2;
+		int rightIndex = currentButterfly + numberButterfliesInSection + currentSection * numberButterfliesInSection * 2;
+		//从共享缓存中获得数据
+		leftValue = sharedStore[leftIndex];
+		rightValue = sharedStore[rightIndex];
+			 						
+		vec2 currentW = rootOfUnityc(numberButterfliesInSection * 2, currentButterfly);
+	
+		vec2 multiply;
+		vec2 addition;
+		vec2 subtraction;
+
+		multiply = mulc(currentW, rightValue);	
+		
+		addition = leftValue + multiply;
+		subtraction = leftValue - multiply; 
+
+		sharedStore[leftIndex] = addition;
+		sharedStore[rightIndex] = subtraction;		
+
+		// 确保所有数据计算并存储完毕	
+		memoryBarrierShared();
+
+		// 根据蝴蝶算法来改变参数	
+		numberButterfliesInSection *= 2;
+		numberSections /= 2;
+
+		currentSection /= 2;
+		currentButterfly = xIndex % numberButterfliesInSection;
+
+		// 确保所有的计算着色器都计算完毕
+		barrier();
+	}
+	
+	// Process twiddle factor for second pass FFT. 
+	if (u_processColumn == 1)
+	{
+		if ((leftStorePos.x + leftStorePos.y) % 2 == 0)
+		{
+			sharedStore[leftStoreIndex] *= -1.0;
+		}
+		if ((rightStorePos.x + rightStorePos.y) % 2 == 0)
+		{
+			sharedStore[rightStoreIndex] *= -1.0;			
+		}
+		
+		memoryBarrierShared();
+	}
+	
+	imageStore(u_imageOut, leftStorePos, vec4(sharedStore[leftStoreIndex], 0.0, 0.0));
+	imageStore(u_imageOut, rightStorePos, vec4(sharedStore[rightStoreIndex], 0.0, 0.0));
+}
