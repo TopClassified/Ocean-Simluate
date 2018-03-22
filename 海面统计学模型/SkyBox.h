@@ -1,9 +1,9 @@
 
 #include<vector>
 
-#include<GL/SOIL.h>
+#include<SOIL.h>
 
-#include<GL/Shader.h>
+#include<Shader.h>
 
 #include<glm/glm.hpp>
 #include<glm\gtc\matrix_transform.hpp>

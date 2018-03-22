@@ -173,7 +173,7 @@ GLboolean OceanMeshForGPU::Init()
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 	free(h0Data);
 
-	//用于存储波浪函数计算出来的复数值的贴图
+	//用于存储波浪函数计算出来的高度复数值的贴图
 	glGenTextures(1, &g_textureHt);
 	glBindTexture(GL_TEXTURE_2D, g_textureHt);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RG32F, N, N, 0, GL_RG, GL_FLOAT, 0);
@@ -182,7 +182,16 @@ GLboolean OceanMeshForGPU::Init()
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-	//用于存储顶点偏移值的贴图（按行计算得到的值）
+	//存储波浪函数计算出来的平面扰动复数值的贴图
+	glGenTextures(1, &g_textureXZt);
+	glBindTexture(GL_TEXTURE_2D, g_textureXZt);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RG32F, N, N, 0, GL_RG, GL_FLOAT, 0);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	//用于存储针对行的逆傅里叶变换后的高度图
 	glGenTextures(1, &g_textureDisplacement[0]);
 	glBindTexture(GL_TEXTURE_2D, g_textureDisplacement[0]);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RG32F, N, N, 0, GL_RG, GL_FLOAT, 0);
@@ -191,7 +200,7 @@ GLboolean OceanMeshForGPU::Init()
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-	//用于存储顶点偏移值的贴图（按列计算得到的值）
+	//用于存储针对列的逆傅里叶变换后的高度图（逆傅里叶变换的最终结果）
 	glGenTextures(1, &g_textureDisplacement[1]);
 	glBindTexture(GL_TEXTURE_2D, g_textureDisplacement[1]);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RG32F, N, N, 0, GL_RG, GL_FLOAT, 0);
@@ -298,10 +307,12 @@ GLboolean OceanMeshForGPU::update(GLfloat time, glm::mat4 Model, glm::mat4 View,
 	glUniform3fv(glGetUniformLocation(g_program->Program, "camPos"), 1, &CamPos[0]);
 	glUseProgram(0);
 
+
 	//使用Update计算着色器并绑定初始值贴图和即时值贴图
 	glUseProgram(g_computeUpdateHtProgram->Program);
 	glBindImageTexture(0, g_textureH0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RG32F);
 	glBindImageTexture(1, g_textureHt, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RG32F);
+	glBindImageTexture(2, g_textureXZt, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RG32F);
 	//传递运行时间
 	glUniform1f(g_totalTimeUpdateHtLocation, totalTime);
 	//创建一个N*N大小的工作组，即同时计算所有的顶点高度值
@@ -309,9 +320,10 @@ GLboolean OceanMeshForGPU::update(GLfloat time, glm::mat4 Model, glm::mat4 View,
 	//确保所有的数据都写入到贴图里了
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
+
 	//使用FFT计算着色器对结果进行逆变换
 	glUseProgram(g_computeFftProgram->Program);
-	//绑定索引贴图、上个计算着色器所得结果的波浪函数贴图、将要存储偏移值的贴图
+	//绑定初始高度纹理、第一次逆变换的结果存储纹理、逆变换所需要的索引对纹理
 	glBindImageTexture(0, g_textureHt, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RG32F);
 	glBindImageTexture(1, g_textureDisplacement[0], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RG32F);
 	glBindImageTexture(2, g_textureIndices, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
@@ -319,13 +331,13 @@ GLboolean OceanMeshForGPU::update(GLfloat time, glm::mat4 Model, glm::mat4 View,
 	// 先对每一行进行逆变换
 	glDispatchCompute(1, N, 1);
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
 	glBindImageTexture(0, g_textureDisplacement[0], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RG32F);
 	glBindImageTexture(1, g_textureDisplacement[1], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RG32F);
 	glUniform1i(g_processColumnFftLocation, 1);
 	// 再对每一列进行逆变换
 	glDispatchCompute(1, N, 1);
 	glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
 
 	//更新法线向量
 	glUseProgram(g_computeUpdateNormalProgram->Program);

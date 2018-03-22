@@ -6,7 +6,7 @@
 
 #include <glm/glm.hpp>
 
-#include <GL/Shader.h>
+#include <Shader.h>
 
 // Number of vertices on one side of the ocean grid. Has to be power of two.
 #define N 512
@@ -61,6 +61,7 @@ private:
 	GLuint g_indicesVBO;
 	GLuint g_textureH0;
 	GLuint g_textureHt;
+	GLuint g_textureXZt;
 	GLuint g_textureIndices;
 	GLuint g_textureDisplacement[2];
 	GLuint g_textureNormal;
